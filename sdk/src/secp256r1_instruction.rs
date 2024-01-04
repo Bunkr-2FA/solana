@@ -8,12 +8,9 @@ use {
     crate::{feature_set::FeatureSet, instruction::Instruction, precompiles::PrecompileError},
     bytemuck::{bytes_of, Pod, Zeroable},
     p256::{
-        ecdsa::{
-            signature::{Signer, Verifier},
-            Signature, SigningKey, VerifyingKey,
-        },
-        elliptic_curve::IsHigh,
-    },
+        ecdsa::{SigningKey, Signature, VerifyingKey, signature::{Signer, Verifier}},
+        elliptic_curve::IsHigh
+    }
 };
 
 pub const COMPRESSED_PUBKEY_SERIALIZED_SIZE: usize = 33;
@@ -26,17 +23,17 @@ pub const DATA_START: usize = SIGNATURE_OFFSETS_SERIALIZED_SIZE + SIGNATURE_OFFS
 #[derive(Default, Debug, Copy, Clone, Zeroable, Pod, Eq, PartialEq)]
 #[repr(C)]
 pub struct Secp256r1SignatureOffsets {
-    signature_offset: u16, // offset to compact secp256r1 signature of 64 bytes
-    signature_instruction_index: u16, // instruction index to find signature
-    public_key_offset: u16, // offset to compressed public key of 33 bytes
+    signature_offset: u16,             // offset to compact secp256r1 signature of 64 bytes
+    signature_instruction_index: u16,  // instruction index to find signature
+    public_key_offset: u16,            // offset to compressed public key of 33 bytes
     public_key_instruction_index: u16, // instruction index to find public key
-    message_data_offset: u16, // offset to start of message data
-    message_data_size: u16, // size of message data
-    message_instruction_index: u16, // index of instruction data to get message data
+    message_data_offset: u16,          // offset to start of message data
+    message_data_size: u16,            // size of message data
+    message_instruction_index: u16,    // index of instruction data to get message data
 }
 
 pub fn new_secp256r1_instruction(signer: &SigningKey, message: &[u8]) -> Instruction {
-    let signature = signer.sign(message);
+    let signature = signer.sign(&message);
     let signature = signature.normalize_s().unwrap_or(signature).to_vec();
     let pubkey = VerifyingKey::from(signer).to_encoded_point(true).to_bytes();
 
@@ -133,7 +130,7 @@ pub fn verify(
             instruction_datas,
             offsets.public_key_instruction_index,
             offsets.public_key_offset,
-            COMPRESSED_PUBKEY_SERIALIZED_SIZE,
+            COMPRESSED_PUBKEY_SERIALIZED_SIZE
         )?;
 
         // Parse out message
@@ -146,7 +143,7 @@ pub fn verify(
         )?;
 
         let signature =
-            Signature::try_from(signature).map_err(|_| PrecompileError::InvalidSignature)?;
+        Signature::try_from(signature).map_err(|_| PrecompileError::InvalidSignature)?;
 
         // Enforce Low-S
         if signature.s().is_high().into() {
@@ -156,8 +153,7 @@ pub fn verify(
         let publickey = p256::ecdsa::VerifyingKey::from_sec1_bytes(pubkey)
             .map_err(|_| PrecompileError::InvalidPublicKey)?;
 
-        publickey
-            .verify(message, &signature)
+        publickey.verify(&message, &signature)
             .map_err(|_| PrecompileError::InvalidSignature)?;
     }
     Ok(())
@@ -194,9 +190,9 @@ pub mod test {
     use {
         super::*,
         crate::{
+            secp256r1_instruction::new_secp256r1_instruction,
             feature_set::FeatureSet,
             hash::Hash,
-            secp256r1_instruction::new_secp256r1_instruction,
             signature::{Keypair, Signer},
             transaction::Transaction,
         },
