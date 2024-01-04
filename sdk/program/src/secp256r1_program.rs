@@ -2,5 +2,4 @@
 //!
 //! [np]:
 
-
 crate::declare_id!("Secp256r1SigVerify1111111111111111111111111");
