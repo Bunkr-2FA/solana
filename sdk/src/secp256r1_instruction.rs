@@ -33,7 +33,7 @@ pub struct Secp256r1SignatureOffsets {
 }
 
 pub fn new_secp256r1_instruction(signer: &SigningKey, message: &[u8]) -> Instruction {
-    let signature = signer.sign(&message);
+    let signature = signer.sign(message);
     let signature = signature.normalize_s().unwrap_or(signature).to_vec();
     let pubkey = VerifyingKey::from(signer).to_encoded_point(true).to_bytes();
 
@@ -153,7 +153,7 @@ pub fn verify(
         let publickey = p256::ecdsa::VerifyingKey::from_sec1_bytes(pubkey)
             .map_err(|_| PrecompileError::InvalidPublicKey)?;
 
-        publickey.verify(&message, &signature)
+        publickey.verify(message, &signature)
             .map_err(|_| PrecompileError::InvalidSignature)?;
     }
     Ok(())
