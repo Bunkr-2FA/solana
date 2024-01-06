@@ -9,11 +9,15 @@ use {
     bytemuck::{bytes_of, Pod, Zeroable},
     p256::{
         ecdsa::{
-            signature::{Signer, Verifier},
-            Signature, SigningKey, VerifyingKey,
+            signature::Signer,
+            SigningKey, VerifyingKey,
         },
-        elliptic_curve::IsHigh,
     },
+    openssl::bn::{BigNum, BigNumContext},
+    openssl::ec::{EcGroup, EcKey, EcPoint},
+    openssl::pkey::PKey,
+    openssl::nid::Nid,
+    openssl::sign::Verifier,
 };
 
 pub const COMPRESSED_PUBKEY_SERIALIZED_SIZE: usize = 33;
@@ -145,20 +149,32 @@ pub fn verify(
             offsets.message_data_size as usize,
         )?;
 
-        let signature =
-            Signature::try_from(signature).map_err(|_| PrecompileError::InvalidSignature)?;
+        let group = EcGroup::from_curve_name(Nid::X9_62_PRIME256V1).map_err(|_| PrecompileError::InvalidSignature)?;
+        let mut ctx = BigNumContext::new().map_err(|_| PrecompileError::InvalidSignature)?;
+        let mut order = BigNum::new().map_err(|_| PrecompileError::InvalidSignature)?;
+        group.order(&mut order, &mut ctx).map_err(|_| PrecompileError::InvalidSignature)?;
 
+        let half_order = &order >> 1;
+        
+        let r_bignum = BigNum::from_slice(&signature[..32]).map_err(|_| PrecompileError::InvalidSignature)?;
+        let s_bignum = BigNum::from_slice(&signature[33..]).map_err(|_| PrecompileError::InvalidSignature)?;
+    
+        // Create an ECDSA signature object from the ASN.1 integers
+        let ecdsa_sig = openssl::ecdsa::EcdsaSig::from_private_components(r_bignum, s_bignum).map_err(|_| PrecompileError::InvalidSignature)?;
+        let ecdsa_sig_der = ecdsa_sig.to_der().map_err(|_| PrecompileError::InvalidSignature)?;
         // Enforce Low-S
-        if signature.s().is_high().into() {
+        if ecdsa_sig.s() > &half_order {
             return Err(PrecompileError::InvalidSignature);
         }
 
-        let publickey = p256::ecdsa::VerifyingKey::from_sec1_bytes(pubkey)
-            .map_err(|_| PrecompileError::InvalidPublicKey)?;
+        let public_key_point = EcPoint::from_bytes(&group, &pubkey, &mut ctx).map_err(|_| PrecompileError::InvalidPublicKey)?;
+        let public_key = EcKey::from_public_key(&group, &public_key_point).map_err(|_| PrecompileError::InvalidPublicKey)?;
+        let pkey = PKey::from_ec_key(public_key).map_err(|_| PrecompileError::InvalidPublicKey)?;
 
-        publickey
-            .verify(message, &signature)
-            .map_err(|_| PrecompileError::InvalidSignature)?;
+        let mut verifier = Verifier::new(openssl::hash::MessageDigest::sha256(), &pkey).map_err(|_| PrecompileError::InvalidSignature)?;
+        verifier.update(&message).map_err(|_| PrecompileError::InvalidSignature)?; 
+
+        verifier.verify(&ecdsa_sig_der).map_err(|_| PrecompileError::InvalidSignature)?;
     }
     Ok(())
 }
