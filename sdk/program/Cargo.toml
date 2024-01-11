@@ -61,6 +61,7 @@ libc = { workspace = true, features = ["extra_traits"] }
 libsecp256k1 = { workspace = true }
 light-poseidon = { workspace = true }
 num-bigint = { workspace = true }
+openssl = { workspace = true }
 p256 = { workspace = true }
 rand = { workspace = true }
 tiny-bip39 = { workspace = true }

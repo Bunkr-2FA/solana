@@ -9,9 +9,10 @@ use {
     bytemuck::{bytes_of, Pod, Zeroable},
     p256::{
         ecdsa::{
+            //Signature,
             signature::Signer,
             SigningKey, VerifyingKey,
-        },
+        }
     },
     openssl::bn::{BigNum, BigNumContext},
     openssl::ec::{EcGroup, EcKey, EcPoint},
@@ -152,29 +153,49 @@ pub fn verify(
         let group = EcGroup::from_curve_name(Nid::X9_62_PRIME256V1).map_err(|_| PrecompileError::InvalidSignature)?;
         let mut ctx = BigNumContext::new().map_err(|_| PrecompileError::InvalidSignature)?;
         let mut order = BigNum::new().map_err(|_| PrecompileError::InvalidSignature)?;
+
         group.order(&mut order, &mut ctx).map_err(|_| PrecompileError::InvalidSignature)?;
 
-        let half_order = &order >> 1;
-        
+        // Calculate half_order = order / 2
+        let mut half_order = BigNum::new().map_err(|_| PrecompileError::InvalidSignature)?;
+        half_order.rshift1(&order).map_err(|_| PrecompileError::InvalidSignature)?;
+
+        // Calculate n_minus_one = order - 1
+        let one = BigNum::from_u32(1).map_err(|_| PrecompileError::InvalidSignature)?;
+        let mut n_minus_one = BigNum::new().map_err(|_| PrecompileError::InvalidSignature)?;
+        n_minus_one.checked_sub(&order, &one).map_err(|_| PrecompileError::InvalidSignature)?;
+
         let r_bignum = BigNum::from_slice(&signature[..32]).map_err(|_| PrecompileError::InvalidSignature)?;
-        let s_bignum = BigNum::from_slice(&signature[33..]).map_err(|_| PrecompileError::InvalidSignature)?;
+        let s_bignum = BigNum::from_slice(&signature[32..]).map_err(|_| PrecompileError::InvalidSignature)?;
     
+        // Since OpenSSL doesnt know what curve this signature is for, we have
+        // to check that r and s are within the order of the curve.
+        let within_order_minus_one = r_bignum > one && r_bignum < n_minus_one && s_bignum > one && s_bignum < n_minus_one;
+        if !within_order_minus_one {
+            return Err(PrecompileError::InvalidSignature);
+        }
         // Create an ECDSA signature object from the ASN.1 integers
         let ecdsa_sig = openssl::ecdsa::EcdsaSig::from_private_components(r_bignum, s_bignum).map_err(|_| PrecompileError::InvalidSignature)?;
+        //println!("Sig: {:?}", ecdsa_sig.to_der().map_err(|_| PrecompileError::InvalidSignature)?);
         let ecdsa_sig_der = ecdsa_sig.to_der().map_err(|_| PrecompileError::InvalidSignature)?;
+    
+
         // Enforce Low-S
         if ecdsa_sig.s() > &half_order {
             return Err(PrecompileError::InvalidSignature);
         }
 
-        let public_key_point = EcPoint::from_bytes(&group, &pubkey, &mut ctx).map_err(|_| PrecompileError::InvalidPublicKey)?;
+        let public_key_point = EcPoint::from_bytes(&group, pubkey, &mut ctx).map_err(|_| PrecompileError::InvalidPublicKey)?;
         let public_key = EcKey::from_public_key(&group, &public_key_point).map_err(|_| PrecompileError::InvalidPublicKey)?;
         let pkey = PKey::from_ec_key(public_key).map_err(|_| PrecompileError::InvalidPublicKey)?;
 
         let mut verifier = Verifier::new(openssl::hash::MessageDigest::sha256(), &pkey).map_err(|_| PrecompileError::InvalidSignature)?;
-        verifier.update(&message).map_err(|_| PrecompileError::InvalidSignature)?; 
+        verifier.update(message).map_err(|_| PrecompileError::InvalidSignature)?; 
 
-        verifier.verify(&ecdsa_sig_der).map_err(|_| PrecompileError::InvalidSignature)?;
+        let result = verifier.verify(&ecdsa_sig_der).map_err(|_| PrecompileError::InvalidSignature)?;
+        if !result {
+            return Err(PrecompileError::InvalidSignature);
+        }
     }
     Ok(())
 }
